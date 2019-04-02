@@ -2521,70 +2521,109 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     // See LongAdder version for explanation
     private final void fullAddCount(long x, boolean wasUncontended) {
         int h;
+        //当前线程的probe为0，说明该线程的ThreadLocalRandom还未被初始化
+        //以及当前线程是第一次进入该函数
         if ((h = ThreadLocalRandom.getProbe()) == 0) {
+            //初始化ThreadLocalRandom，并且为当前线程设置一个probe
             ThreadLocalRandom.localInit();      // force initialization
             h = ThreadLocalRandom.getProbe();
+            //因为是第一次初始化，所以，h所对应的CounterCell数组中的元素没有竞争
+            //未竞争标志位
             wasUncontended = true;
         }
+        //冲突标志位
         boolean collide = false;                // True if last slot nonempty
+        //类似于一个自旋锁
         for (;;) {
             CounterCell[] as; CounterCell a; int n; long v;
+            //如果CounterCell已经被初始化过
             if ((as = counterCells) != null && (n = as.length) > 0) {
+                //如果h所对应的CounterCell数组中的元素没有没初始化
                 if ((a = as[(n - 1) & h]) == null) {
+                    //private transient volatile int cellsBusy;
+                    //cellBusy值有0和1两个状态，它被当做一个自旋锁，0代表无所，1代表有锁
                     if (cellsBusy == 0) {            // Try to attach new Cell
+                        //通过更改元素的个数x，创建一个CounterCell对象
                         CounterCell r = new CounterCell(x); // Optimistic create
+                        //通过CAS尝试对自旋锁加锁，如果没有加锁成功，还会重新进入for循环
                         if (cellsBusy == 0 &&
                             U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
+                            //加锁成功之后，声明cell是或否创建成功标志
                             boolean created = false;
                             try {               // Recheck under lock
                                 CounterCell[] rs; int m, j;
+                                //再次判断CounterCell数组是否不为空
+                                //并且找到该线程的probe所在数组中的位置
                                 if ((rs = counterCells) != null &&
                                     (m = rs.length) > 0 &&
                                     rs[j = (m - 1) & h] == null) {
+                                    //将刚才创建CounterCell对象放入到CounterCell数组中
                                     rs[j] = r;
+                                    //创建成功标记
                                     created = true;
                                 }
                             } finally {
+                                //释放锁
                                 cellsBusy = 0;
                             }
+                            //如果成功，直接结束
                             if (created)
                                 break;
+                            //如果没有成功，说明在CounterCell数组中第(m - 1) & h个元素已经被别的元素占用，此时需要重新开始
                             continue;           // Slot is now non-empty
                         }
                     }
                     collide = false;
                 }
+                //as[(n - 1) & h]不为空，并且在addCount()函数中通过CAS修改当前线程的Cell进行急速失败，会传入wasUncontended=false
+                //代表这个时候，已经有其他的竞争使用as[(n - 1) & h]这个位置，所有当前线程需要重新rehash，重新生成一个probe
                 else if (!wasUncontended)       // CAS already known to fail
+                    //设置为竞争标志，之后会重新计算probe,然后重新执行循环
                     wasUncontended = true;      // Continue after rehash
+                //尝试进行更新CounterCell中a = as[(n - 1) & h])的值，如果更新成功，直接结束
                 else if (U.compareAndSwapLong(a, CELLVALUE, v = a.value, v + x))
                     break;
+                //尝试更新失败，检查CounterCell已经扩容，或者容量达到最大值(CPU数目)
                 else if (counterCells != as || n >= NCPU)
+                    //设置冲突标志，防止跳入下面的扩容分支
+                    //之后重新计算probe
                     collide = false;            // At max size or stale
+                //设置冲突标志，重新执行循环
+                //如果下次循环执行到分支，到下一个分支进行扩容
                 else if (!collide)
                     collide = true;
+                //尝试加锁，然后读counterCells数组进行扩容
                 else if (cellsBusy == 0 &&
                          U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
                     try {
+                        //检查是否已被扩容
                         if (counterCells == as) {// Expand table unless stale
+                            //新数组容量为之前的1倍
                             CounterCell[] rs = new CounterCell[n << 1];
+                            //迁移到新数组
                             for (int i = 0; i < n; ++i)
                                 rs[i] = as[i];
                             counterCells = rs;
                         }
                     } finally {
+                        //释放锁
                         cellsBusy = 0;
                     }
                     collide = false;
+                    //重新进入循环
                     continue;                   // Retry with expanded table
                 }
                 h = ThreadLocalRandom.advanceProbe(h);
             }
+            //如果CounterCell数组未被初始化，尝试获取自旋锁，然后进行初始化
             else if (cellsBusy == 0 && counterCells == as &&
                      U.compareAndSwapInt(this, CELLSBUSY, 0, 1)) {
                 boolean init = false;
                 try {                           // Initialize table
                     if (counterCells == as) {
+                        //初始化数组大小容量是2
                         CounterCell[] rs = new CounterCell[2];
+                        //初始化第一个线程的CounterCell元素
                         rs[h & 1] = new CounterCell(x);
                         counterCells = rs;
                         init = true;
@@ -2592,9 +2631,11 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                 } finally {
                     cellsBusy = 0;
                 }
+                //初始化成功之后，退出循环
                 if (init)
                     break;
             }
+            //如果自旋锁被占用，则只要尝试更新baseCount
             else if (U.compareAndSwapLong(this, BASECOUNT, v = baseCount, v + x))
                 break;                          // Fall back on using base
         }
