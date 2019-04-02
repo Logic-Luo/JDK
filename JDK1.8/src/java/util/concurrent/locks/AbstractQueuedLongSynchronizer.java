@@ -973,8 +973,8 @@ public abstract class AbstractQueuedLongSynchronizer
      *        can represent anything you like.
      */
     public final void acquire(long arg) {
-        if (!tryAcquire(arg) &&
-            acquireQueued(addWaiter(Node.EXCLUSIVE), arg))
+        if (!tryAcquire(arg) && //第一步的时候，加锁失败了
+            acquireQueued(addWaiter(Node.EXCLUSIVE), arg)) //判断有没有被中断过，如果被中断过的话，则进入下面，没被中断过，该方法执行结束
             selfInterrupt();
     }
 

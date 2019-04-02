@@ -2329,10 +2329,13 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      */
     private final void addCount(long x, int check) {
         CounterCell[] as; long b, s;
+        //尝试使用CAS更新baseCount失败，转用CounterCells进行更新
         if ((as = counterCells) != null ||
             !U.compareAndSetLong(this, BASECOUNT, b = baseCount, s = b + x)) {
             CounterCell a; long v; int m;
             boolean uncontended = true;
+            //在CounterCells没有初始化，或尝试通过CAS更新当前线程的CounterCell失败是，
+            //调用fullAddCount(),该函数负责初始化CounterCells和更新计数
             if (as == null || (m = as.length - 1) < 0 ||
                 (a = as[ThreadLocalRandom.getProbe() & m]) == null ||
                 !(uncontended =
@@ -2340,26 +2343,36 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                 fullAddCount(x, uncontended);
                 return;
             }
+            //在替换或者删除的时候，不需要进行扩容，所以在这直接返回
             if (check <= 1)
                 return;
+            //统计Map中所有数据
             s = sumCount();
         }
+        //检验是否需要扩容
         if (check >= 0) {
             Node<K,V>[] tab, nt; int n, sc;
+            //当前元素的个数是大于等于sizeCtl时，进行扩容
             while (s >= (long)(sc = sizeCtl) && (tab = table) != null &&
                    (n = tab.length) < MAXIMUM_CAPACITY) {
+                //扩容标志位
                 int rs = resizeStamp(n);
+                //sc 为负数的时候，说明正在扩容
                 if (sc < 0) {
+                    //扩容已经结束，中断循环
                     if ((sc >>> RESIZE_STAMP_SHIFT) != rs || sc == rs + 1 ||
                         sc == rs + MAX_RESIZERS || (nt = nextTable) == null ||
                         transferIndex <= 0)
                         break;
+                    //如果扩容没有结束的话，当前线程帮助去扩容，并设置sizeCtl，表示扩容线程+1
                     if (U.compareAndSetInt(this, SIZECTL, sc, sc + 1))
                         transfer(tab, nt);
                 }
+                //触发扩容，也就是第一个进行扩容的
                 else if (U.compareAndSetInt(this, SIZECTL, sc,
                                              (rs << RESIZE_STAMP_SHIFT) + 2))
                     transfer(tab, null);
+                //重新计算Map中的元素的个数，再判断需不需要再次进行扩容
                 s = sumCount();
             }
         }
